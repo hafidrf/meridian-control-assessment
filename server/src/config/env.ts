@@ -13,7 +13,13 @@ export const env = {
   jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? "15m",
   jwtRefreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN ?? "7d",
   databasePath: process.env.DATABASE_PATH ?? "./data/meridian.db",
-  corsOrigin: process.env.CORS_ORIGIN ?? "http://localhost:5173",
+  /**
+   * Comma-separated allowlist. Never returns "*" together with credentials.
+   */
+  corsOrigins: (process.env.CORS_ORIGIN ?? "http://localhost:5173,http://localhost:4000")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean),
   uploadDir: process.env.UPLOAD_DIR ?? "./uploads",
   rateLimitWindowMs: Number(process.env.RATE_LIMIT_WINDOW_MS ?? 60_000),
   rateLimitMax: Number(process.env.RATE_LIMIT_MAX ?? 120),

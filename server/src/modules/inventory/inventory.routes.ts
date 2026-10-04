@@ -4,6 +4,8 @@ import { db } from "../../db/client.js";
 import { requireAuth, requireRoles } from "../../middleware/auth.js";
 import { validate } from "../../middleware/validate.js";
 import { notImplemented } from "../../utils/errors.js";
+import { listResponse } from "../../utils/respond.js";
+import type { PaginationQuery } from "../../types/index.js";
 import type { Request, Response } from "express";
 
 /**
@@ -23,8 +25,9 @@ const adjustSchema = z.object({
 export const inventoryRouter = Router();
 inventoryRouter.use(requireAuth);
 
-inventoryRouter.get("/products", (_req: Request, res: Response) => {
-  res.json({ items: db.prepare("SELECT * FROM products").all() });
+inventoryRouter.get("/products", (req: Request, res: Response) => {
+  const rows = db.prepare("SELECT * FROM products").all();
+  listResponse(res, rows as object[], req.query as PaginationQuery);
 });
 
 inventoryRouter.post("/products", requireRoles("admin", "warehouse"), validate(
@@ -52,7 +55,7 @@ inventoryRouter.get("/levels", (req: Request, res: Response) => {
        JOIN products p ON p.id = i.product_id
        JOIN warehouses w ON w.id = i.warehouse_id`;
   const rows = warehouseId ? db.prepare(sql).all(warehouseId) : db.prepare(sql).all();
-  res.json(rows);
+  listResponse(res, rows as object[], req.query as PaginationQuery);
 });
 
 inventoryRouter.post("/adjust", requireRoles("warehouse", "admin"), validate(adjustSchema), (_req, res) => {

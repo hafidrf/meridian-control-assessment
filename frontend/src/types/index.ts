@@ -1,4 +1,5 @@
-export type Role = "ADMIN" | "DISPATCHER" | "WAREHOUSE" | "DRIVER" | "VIEWER";
+// Contract shared with the server (see NOTES.md): statuses and roles are lowercase.
+export type Role = "admin" | "dispatcher" | "warehouse" | "driver" | "viewer";
 
 export type User = {
   id: string;
@@ -8,17 +9,31 @@ export type User = {
   warehouseId?: string;
 };
 
-export type OrderStatus = "PENDING" | "IN_PROGRESS" | "COMPLETE" | "CANCELLED";
+export type OrderStatus = "pending" | "picking" | "packed" | "shipped" | "delivered" | "cancelled";
+export type OrderPriority = "low" | "normal" | "high" | "urgent";
+
+export type OrderLine = {
+  id: string;
+  orderId: string;
+  productId: string;
+  qty: number;
+  qtyPicked: number;
+  unitPrice: number;
+};
 
 export type Order = {
   id: string;
-  ref: string;
+  reference: string;
   customerId: string;
   warehouseId: string;
   status: OrderStatus;
-  priority: string;
-  promisedAt?: number;
-  notes?: string;
+  priority: OrderPriority;
+  promisedAt: string | null;
+  notes: string | null;
+  createdBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+  lines?: OrderLine[];
 };
 
 export type Shipment = {
@@ -40,8 +55,8 @@ export type Warehouse = {
 export type InventoryRow = {
   id: string;
   sku: string;
-  onHand: string;
-  reserved: string;
+  onHand: number;
+  reserved: number;
   warehouse: string;
 };
 
@@ -53,6 +68,21 @@ export type KpiPayload = {
   generatedAt: string;
 };
 
+/** Unified error envelope: { error: { code, message, details? } } */
 export type ApiError = {
-  message: string;
+  error: {
+    code: string;
+    message: string;
+    details?: unknown;
+  };
+};
+
+/** Unified list envelope: { data, page, pageSize, total, sort, order } */
+export type ListEnvelope<T> = {
+  data: T[];
+  page: number;
+  pageSize: number;
+  total: number;
+  sort: string;
+  order: "asc" | "desc";
 };

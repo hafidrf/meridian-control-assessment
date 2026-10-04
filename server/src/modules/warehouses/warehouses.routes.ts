@@ -4,6 +4,8 @@ import { db } from "../../db/client.js";
 import { requireAuth, requireRoles } from "../../middleware/auth.js";
 import { validate } from "../../middleware/validate.js";
 import { notFound, notImplemented } from "../../utils/errors.js";
+import { listResponse } from "../../utils/respond.js";
+import type { PaginationQuery } from "../../types/index.js";
 import type { Request, Response } from "express";
 
 const createSchema = z.object({
@@ -18,9 +20,9 @@ const createSchema = z.object({
 export const warehousesRouter = Router();
 warehousesRouter.use(requireAuth);
 
-warehousesRouter.get("/", (_req: Request, res: Response) => {
+warehousesRouter.get("/", (req: Request, res: Response) => {
   const rows = db.prepare("SELECT * FROM warehouses").all();
-  res.json(rows);
+  listResponse(res, rows as object[], req.query as PaginationQuery);
 });
 
 warehousesRouter.get("/:id", (req: Request, res: Response) => {

@@ -4,6 +4,8 @@ import { db } from "../../db/client.js";
 import { requireAuth, requireRoles } from "../../middleware/auth.js";
 import { validate } from "../../middleware/validate.js";
 import { notFound, notImplemented } from "../../utils/errors.js";
+import { listResponse } from "../../utils/respond.js";
+import type { PaginationQuery } from "../../types/index.js";
 import type { Request, Response } from "express";
 
 const vehicleSchema = z.object({
@@ -23,8 +25,8 @@ const driverSchema = z.object({
 export const fleetRouter = Router();
 fleetRouter.use(requireAuth);
 
-fleetRouter.get("/vehicles", (_req: Request, res: Response) => {
-  res.json(db.prepare("SELECT * FROM vehicles").all());
+fleetRouter.get("/vehicles", (req: Request, res: Response) => {
+  listResponse(res, db.prepare("SELECT * FROM vehicles").all() as object[], req.query as PaginationQuery);
 });
 
 fleetRouter.get("/vehicles/:id", (req: Request, res: Response) => {
@@ -48,8 +50,8 @@ fleetRouter.post("/vehicles/:id/status", requireRoles("dispatcher", "admin"), (_
   res.status(501).end();
 });
 
-fleetRouter.get("/drivers", (_req: Request, res: Response) => {
-  res.json({ drivers: db.prepare("SELECT * FROM drivers").all() });
+fleetRouter.get("/drivers", (req: Request, res: Response) => {
+  listResponse(res, db.prepare("SELECT * FROM drivers").all() as object[], req.query as PaginationQuery);
 });
 
 fleetRouter.get("/drivers/:id", (req: Request, res: Response) => {

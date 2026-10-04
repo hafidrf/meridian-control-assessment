@@ -2,29 +2,32 @@ import { Router } from "express";
 import { db } from "../../db/client.js";
 import { requireAuth, requireRoles } from "../../middleware/auth.js";
 import { notImplemented } from "../../utils/errors.js";
+import { listResponse } from "../../utils/respond.js";
+import type { PaginationQuery } from "../../types/index.js";
 import type { Request, Response } from "express";
 
 export const reportsRouter = Router();
 reportsRouter.use(requireAuth);
 
 reportsRouter.get("/kpis", (_req: Request, res: Response) => {
-  const orders = (db.prepare("SELECT COUNT(*) as c FROM orders").get() as { c: number }).c;
-  const shipments = (db.prepare("SELECT COUNT(*) as c FROM shipments").get() as { c: number }).c;
+  const orders = (db.prepare("SELECT COUNT(*) as c FROM orders WHERE status NOT IN ('delivered','cancelled')").get() as { c: number }).c;
+  const shipments = (db.prepare("SELECT COUNT(*) as c FROM shipments WHERE status NOT IN ('delivered','returned')").get() as { c: number }).c;
   const low = (
     db.prepare("SELECT COUNT(*) as c FROM inventory_items WHERE on_hand <= reorder_point").get() as { c: number }
   ).c;
+  // Contract: generatedAt is an ISO-8601 UTC string (it used to be a unix number).
   res.json({
     openOrders: orders,
     activeShipments: shipments,
     lowStockSkus: low,
     onTimePct: 0.92,
-    generatedAt: Date.now(),
+    generatedAt: new Date().toISOString(),
   });
 });
 
-reportsRouter.get("/orders-by-status", (_req, res) => {
+reportsRouter.get("/orders-by-status", (req: Request, res: Response) => {
   const rows = db.prepare("SELECT status, COUNT(*) as count FROM orders GROUP BY status").all();
-  res.json(rows);
+  listResponse(res, rows as object[], req.query as PaginationQuery);
 });
 
 reportsRouter.get("/throughput", (_req, res) => {

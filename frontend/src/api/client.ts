@@ -36,8 +36,21 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const data = text ? JSON.parse(text) : null;
 
   if (!res.ok) {
-    const err = data as ApiError;
-    throw new HttpError(res.status, err?.message ?? "Request failed", data);
+    const err = data as ApiError | undefined;
+    // Server contract: { error: { code, message, details? } } — also tolerate
+    // legacy/intermediary shapes ({ message } or { error: "string" }) so no
+    // failure ever surfaces as a bare "Request failed".
+    const message =
+      err && typeof err === "object"
+        ? (err.error && typeof err.error === "object"
+            ? err.error.message
+            : undefined) ??
+          (typeof (err as unknown as { message?: unknown }).message === "string"
+            ? (err as unknown as { message: string }).message
+            : undefined) ??
+          `Request failed (${res.status})`
+        : `Request failed (${res.status})`;
+    throw new HttpError(res.status, message, data);
   }
   return data as T;
 }

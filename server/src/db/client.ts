@@ -19,6 +19,11 @@ class DbFacade {
 
   constructor() {
     this.inner = new DatabaseSync(resolveDbPath());
+    // Referential integrity was OFF in the starter, so orphaned rows were
+    // silently possible. Enforce it, and use WAL so readers do not block writes.
+    this.inner.exec("PRAGMA foreign_keys = ON");
+    this.inner.exec("PRAGMA journal_mode = WAL");
+    this.inner.exec("PRAGMA busy_timeout = 5000");
   }
 
   prepare(sql: string) {
@@ -27,6 +32,29 @@ class DbFacade {
 
   exec(sql: string) {
     return this.inner.exec(sql);
+  }
+
+  /**
+   * node:sqlite has no `.transaction()` helper (that is better-sqlite3), so we
+   * wrap BEGIN/COMMIT/ROLLBACK ourselves. Nested calls reuse the outer txn.
+   */
+  transaction<T>(fn: () => T): T {
+    const alreadyOpen = this.inner.isTransaction;
+    if (!alreadyOpen) this.inner.exec("BEGIN IMMEDIATE");
+    try {
+      const result = fn();
+      if (!alreadyOpen) this.inner.exec("COMMIT");
+      return result;
+    } catch (err) {
+      if (!alreadyOpen) {
+        try {
+          this.inner.exec("ROLLBACK");
+        } catch {
+          // rollback may fail if the txn was already aborted
+        }
+      }
+      throw err;
+    }
   }
 
   close() {
@@ -40,6 +68,9 @@ class DbFacade {
       // already closed
     }
     this.inner = new DatabaseSync(resolveDbPath());
+    this.inner.exec("PRAGMA foreign_keys = ON");
+    this.inner.exec("PRAGMA journal_mode = WAL");
+    this.inner.exec("PRAGMA busy_timeout = 5000");
   }
 }
 

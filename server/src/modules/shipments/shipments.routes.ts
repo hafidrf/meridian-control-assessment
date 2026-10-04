@@ -4,6 +4,8 @@ import { db } from "../../db/client.js";
 import { requireAuth, requireRoles } from "../../middleware/auth.js";
 import { validate } from "../../middleware/validate.js";
 import { notFound, notImplemented } from "../../utils/errors.js";
+import { listResponse } from "../../utils/respond.js";
+import type { PaginationQuery } from "../../types/index.js";
 import type { Request, Response } from "express";
 
 export type ShipmentStatus =
@@ -39,7 +41,14 @@ shipmentsRouter.get("/", (req: Request, res: Response) => {
   const rows = status
     ? db.prepare("SELECT * FROM shipments WHERE status = ?").all(status)
     : db.prepare("SELECT * FROM shipments").all();
-  res.json({ shipments: rows });
+  listResponse(res, rows as object[], req.query as PaginationQuery);
+});
+
+// Registered before "/:id" — otherwise "track" is matched as an id (route order bug).
+shipmentsRouter.get("/track/:trackingNo", (req: Request, res: Response) => {
+  const row = db.prepare("SELECT * FROM shipments WHERE tracking_no = ?").get(req.params.trackingNo);
+  if (!row) notFound("Shipment");
+  res.json(row);
 });
 
 shipmentsRouter.get("/:id", (req: Request, res: Response) => {
@@ -47,12 +56,6 @@ shipmentsRouter.get("/:id", (req: Request, res: Response) => {
   if (!row) notFound("Shipment", req.params.id);
   const events = db.prepare("SELECT * FROM shipment_events WHERE shipment_id = ? ORDER BY created_at").all(req.params.id);
   res.json({ ...row, events });
-});
-
-shipmentsRouter.get("/track/:trackingNo", (req: Request, res: Response) => {
-  const row = db.prepare("SELECT * FROM shipments WHERE tracking_no = ?").get(req.params.trackingNo);
-  if (!row) notFound("Shipment");
-  res.json(row);
 });
 
 shipmentsRouter.post("/", requireRoles("dispatcher", "admin"), validate(createSchema), (_req, res) => {

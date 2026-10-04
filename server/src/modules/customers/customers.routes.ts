@@ -4,6 +4,8 @@ import { db } from "../../db/client.js";
 import { requireAuth, requireRoles } from "../../middleware/auth.js";
 import { validate } from "../../middleware/validate.js";
 import { notFound, notImplemented } from "../../utils/errors.js";
+import { listResponse } from "../../utils/respond.js";
+import type { PaginationQuery } from "../../types/index.js";
 import type { Request, Response } from "express";
 
 const createSchema = z.object({
@@ -23,7 +25,7 @@ customersRouter.get("/", (req: Request, res: Response) => {
   const rows = q
     ? db.prepare("SELECT * FROM customers WHERE name LIKE ? OR code LIKE ?").all(`%${q}%`, `%${q}%`)
     : db.prepare("SELECT * FROM customers").all();
-  res.json({ results: rows });
+  listResponse(res, rows as object[], req.query as PaginationQuery);
 });
 
 customersRouter.get("/:id", (req: Request, res: Response) => {

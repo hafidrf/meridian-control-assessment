@@ -1,11 +1,12 @@
 import { apiDelete, apiGet, apiPatch, apiPost } from "./client";
-import type { Order } from "../types";
+import type { ListEnvelope, Order } from "../types";
 
 export const ordersApi = {
-  list: (page = 1, pageSize = 25, status?: string) => {
-    const q = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
-    if (status) q.set("status", status);
-    return apiGet<{ items: Order[]; total: number }>(`/orders?${q.toString()}`);
+  list: (page = 1, pageSize = 25, status?: string, q?: string) => {
+    const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+    if (status) params.set("status", status);
+    if (q) params.set("q", q);
+    return apiGet<ListEnvelope<Order>>(`/orders?${params.toString()}`);
   },
   get: (id: string) => apiGet<Order>(`/orders/${id}`),
   create: (body: unknown) => apiPost<Order>("/orders", body),

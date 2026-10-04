@@ -26,5 +26,7 @@ export type Order = {
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;
+  /** Set once stock has been reserved; required before the order can be picked. */
+  allocatedAt?: string | null;
   lines?: OrderLine[];
 };

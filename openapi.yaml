@@ -1,0 +1,964 @@
+openapi: 3.0.3
+info:
+  title: Meridian Control API
+  version: 0.1.0
+  description: |
+    Internal control-tower API for a 3PL (warehouses, inventory, orders,
+    last-mile shipments, fleet).
+
+    ## Conventions (the single contract)
+
+    **List envelope** — every collection endpoint returns exactly:
+    `{ data, page, pageSize, total, sort, order }`
+
+    **Error envelope** — every failure, including the 404 handler and the 429
+    rate limiter:
+    `{ error: { code, message, details? } }`
+
+    **Types** — enums are lowercase; dates are ISO-8601 UTC strings; inventory
+    quantities are integers; money is integer minor units; booleans are booleans.
+
+    **Idempotency** — `POST /orders` and `POST /inventory/adjust` accept an
+    `Idempotency-Key` header. A replay returns the stored response and sets
+    `Idempotent-Replay: true`.
+
+servers:
+  - url: http://localhost:4000/api
+    description: Local development
+
+tags:
+  - name: Auth
+  - name: Orders
+  - name: Inventory
+  - name: Shipments
+  - name: Customers
+  - name: Warehouses
+  - name: Fleet
+  - name: Search
+  - name: Reports
+  - name: Notifications
+  - name: Uploads
+  - name: Audit
+  - name: Webhooks
+  - name: Health
+
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      security: []
+      summary: Liveness probe
+      responses:
+        "200":
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+                  service: { type: string, example: meridian-api }
+                  ts: { type: string, format: date-time }
+
+  /health/ready:
+    get:
+      tags: [Health]
+      security: []
+      summary: Readiness probe
+      responses:
+        "200":
+          description: Ready to serve traffic
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      security: []
+      summary: Exchange credentials for a token pair
+      description: Rate limited per IP. Returns the standard error envelope with code `RATE_LIMITED` (429) when tripped.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, minLength: 1 }
+      responses:
+        "200":
+          description: Authenticated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [user, tokens]
+                properties:
+                  user: { $ref: "#/components/schemas/PublicUser" }
+                  tokens: { $ref: "#/components/schemas/AuthTokens" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      security: []
+      summary: Rotate a refresh token
+      description: |
+        The supplied token is revoked in the same transaction that mints the new
+        pair. Replaying an already-rotated token is treated as theft and revokes
+        every active token for that user (401).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken: { type: string }
+      responses:
+        "200":
+          description: New token pair
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthTokens" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      security: []
+      summary: Revoke a refresh token (idempotent)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refreshToken: { type: string }
+      responses:
+        "204": { description: Revoked (also returned when it was already revoked) }
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Current user
+      responses:
+        "200":
+          description: The authenticated user
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PublicUser" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Create a user (admin only)
+      description: |
+        Registration is admin-only. There is no public self-signup surface.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, name, role, password]
+              properties:
+                email: { type: string, format: email }
+                name: { type: string, minLength: 1 }
+                role: { $ref: "#/components/schemas/Role" }
+                password: { type: string, minLength: 8 }
+                warehouseId: { type: string, nullable: true }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PublicUser" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /auth/forgot-password:
+    post:
+      tags: [Auth]
+      security: []
+      summary: Request a password reset token
+      description: Never reveals whether the email exists. Rate limited.
+      responses:
+        "200": { description: Always accepted }
+
+  /auth/reset-password:
+    post:
+      tags: [Auth]
+      security: []
+      summary: Consume a reset token and set a new password
+      description: Tokens expire after 30 minutes and are strictly single use.
+      responses:
+        "200": { description: Password changed, existing sessions revoked }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /auth/change-password:
+    post:
+      tags: [Auth]
+      summary: Change the current user's password
+      description: Requires the current password. Revokes all other refresh tokens.
+      responses:
+        "200": { description: Changed }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /orders:
+    get:
+      tags: [Orders]
+      summary: List orders
+      description: |
+        Pagination is applied **in SQL**. `sort` is allowlisted
+        (`createdAt`, `updatedAt`, `reference`, `status`, `priority`, `promisedAt`);
+        anything else falls back to `createdAt`. A `warehouse` user only ever sees
+        rows for their own warehouse, enforced in the query.
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/Sort"
+        - $ref: "#/components/parameters/Order"
+        - name: status
+          in: query
+          schema: { $ref: "#/components/schemas/OrderStatus" }
+        - name: warehouseId
+          in: query
+          schema: { type: string }
+        - name: q
+          in: query
+          description: Substring match on `reference`
+          schema: { type: string }
+      responses:
+        "200":
+          description: Page of orders
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Order" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [Orders]
+      summary: Create an order
+      description: |
+        Generates a monotonic `reference`, persists line items, defaults the status
+        to `pending` and attributes the order to the caller. Honours
+        `Idempotency-Key`. Requires role `admin` or `dispatcher`.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema: { type: string, maxLength: 200 }
+          description: Replays return the original response with `Idempotent-Replay true`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateOrderRequest" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Order" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /orders/export:
+    get:
+      tags: [Orders]
+      summary: Export orders as CSV
+      description: Registered before `/orders/{id}` so `export` is not parsed as an id.
+      responses:
+        "200":
+          description: CSV attachment
+          content:
+            text/csv:
+              schema: { type: string }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /orders/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ResourceId"
+    get:
+      tags: [Orders]
+      summary: Get an order with its lines
+      responses:
+        "200":
+          description: The order
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Order" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [Orders]
+      summary: Update an order
+      description: Only permitted while the order is editable (`pending`, `picking`, `packed`).
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                notes: { type: string }
+                priority: { $ref: "#/components/schemas/OrderPriority" }
+                promisedAt: { type: string, format: date-time }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Order" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    delete:
+      tags: [Orders]
+      summary: Delete an order (admin only)
+      description: Refused with 409 once fulfilment is in progress — cancel it instead.
+      responses:
+        "204": { description: Deleted }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /orders/{id}/transition:
+    post:
+      tags: [Orders]
+      summary: Move an order to the next status
+      description: |
+        Only the graph `pending→picking→packed→shipped→delivered` is allowed, plus
+        `cancelled` from any pre-ship status. Entering `picking` requires the order
+        to have been allocated first. Cancelling releases the reservations.
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { $ref: "#/components/schemas/OrderStatus" }
+                note: { type: string }
+      responses:
+        "200":
+          description: Transitioned
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Order" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /orders/{id}/allocate:
+    post:
+      tags: [Orders]
+      summary: Reserve stock for every line
+      description: |
+        Runs in one transaction, bumps each inventory row `version`, and refuses to
+        partially allocate. Fails with 409 `INSUFFICIENT_STOCK` plus a per-line
+        `shortages` array when stock is short. Requires role `warehouse` or `admin`.
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Allocated; `allocatedAt` is now set
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Order" }
+        "409":
+          description: Not enough stock, or a concurrent inventory change
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: object
+                    properties:
+                      code: { type: string, example: INSUFFICIENT_STOCK }
+                      message: { type: string }
+                      details:
+                        type: object
+                        properties:
+                          shortages:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                productId: { type: string }
+                                required: { type: integer }
+                                available: { type: integer }
+
+  /orders/{id}/duplicate:
+    post:
+      tags: [Orders]
+      summary: Duplicate an order
+      responses:
+        "201":
+          description: New order
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Order" }
+
+  /orders/bulk-status:
+    post:
+      tags: [Orders]
+      summary: Change status for many orders
+      description: |
+        Runs in a single transaction and reports a per-id outcome, so a partially
+        successful batch is visible rather than silently half-applied.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ids, status]
+              properties:
+                ids:
+                  type: array
+                  minItems: 1
+                  maxItems: 500
+                  items: { type: string }
+                status: { $ref: "#/components/schemas/OrderStatus" }
+      responses:
+        "200":
+          description: Per-id result summary
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  requested: { type: integer }
+                  succeeded: { type: integer }
+                  failed: { type: integer }
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        ok: { type: boolean }
+                        error: { type: string }
+
+  /inventory/products:
+    get:
+      tags: [Inventory]
+      summary: List products
+      responses:
+        "200":
+          description: Page of products
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ListEnvelope" }
+
+  /inventory/levels:
+    get:
+      tags: [Inventory]
+      summary: Inventory levels joined with product and warehouse
+      parameters:
+        - name: warehouseId
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Page of inventory rows
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ListEnvelope" }
+
+  /inventory/adjust:
+    post:
+      tags: [Inventory]
+      summary: Adjust on-hand quantity (stub — see NOTES.md)
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema: { type: string }
+      responses:
+        "501": { description: Not implemented in this timebox }
+
+  /shipments:
+    get:
+      tags: [Shipments]
+      summary: List shipments
+      responses:
+        "200":
+          description: Page of shipments
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ListEnvelope" }
+
+  /shipments/track/{trackingNo}:
+    get:
+      tags: [Shipments]
+      summary: Look up a shipment by tracking number
+      description: Registered before `/shipments/{id}` to avoid the route-order bug.
+      parameters:
+        - name: trackingNo
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: The shipment }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /customers:
+    get:
+      tags: [Customers]
+      summary: List customers
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - name: q
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Page of customers
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ListEnvelope" }
+
+  /warehouses:
+    get:
+      tags: [Warehouses]
+      summary: List warehouses
+      responses:
+        "200":
+          description: Page of warehouses
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ListEnvelope" }
+
+  /fleet/vehicles:
+    get:
+      tags: [Fleet]
+      summary: List vehicles
+      responses:
+        "200":
+          description: Page of vehicles
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ListEnvelope" }
+
+  /fleet/drivers:
+    get:
+      tags: [Fleet]
+      summary: List drivers
+      responses:
+        "200":
+          description: Page of drivers
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ListEnvelope" }
+
+  /search:
+    get:
+      tags: [Search]
+      summary: Global search for the shell command palette
+      description: |
+        Searches orders, shipments, customers and products. Capped per type.
+        Queries shorter than 2 characters return an empty page rather than an
+        error, so the palette does not fan out on every keystroke. Rate limited
+        to 60 requests/minute.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string }
+        - name: types
+          in: query
+          description: Comma-separated subset of `order,shipment,customer,product`
+          schema: { type: string, default: order,shipment,customer,product }
+      responses:
+        "200":
+          description: Capped results plus type facets
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      facets:
+                        type: object
+                        additionalProperties: { type: integer }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /reports/kpis:
+    get:
+      tags: [Reports]
+      summary: Headline KPIs
+      responses:
+        "200":
+          description: KPI payload
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [openOrders, activeShipments, lowStockSkus, onTimePct, generatedAt]
+                properties:
+                  openOrders: { type: integer }
+                  activeShipments: { type: integer }
+                  lowStockSkus: { type: integer }
+                  onTimePct: { type: number, format: float }
+                  generatedAt:
+                    type: string
+                    format: date-time
+                    description: ISO-8601 UTC (was a unix number before the contract fix)
+
+  /reports/orders-by-status:
+    get:
+      tags: [Reports]
+      summary: Order counts grouped by status
+      responses:
+        "200":
+          description: Page of `{ status, count }`
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ListEnvelope" }
+
+  /notifications:
+    get:
+      tags: [Notifications]
+      summary: List notifications for the current user
+      responses:
+        "200":
+          description: Page of notifications
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ListEnvelope" }
+
+  /notifications/unread-count:
+    get:
+      tags: [Notifications]
+      summary: Unread badge count for the shell bell
+      responses:
+        "200":
+          description: Count
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  unread: { type: integer }
+
+  /notifications/{id}/read:
+    post:
+      tags: [Notifications]
+      summary: Mark one notification read (scoped to the current user)
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200": { description: Marked }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /notifications/read-all:
+    post:
+      tags: [Notifications]
+      summary: Mark every notification read for the current user
+      responses:
+        "200":
+          description: Count updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  updated: { type: integer }
+
+  /uploads:
+    post:
+      tags: [Uploads]
+      summary: Upload a file
+      description: |
+        MIME **and** extension must both be on the allowlist (png, jpeg, webp,
+        pdf, csv). Per-type size caps: 5 MB for images, 10 MB for documents.
+        Metadata is written to `file_assets`.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+                resourceType: { type: string }
+                resourceId: { type: string }
+      responses:
+        "201":
+          description: Stored
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  filename: { type: string }
+                  mime: { type: string }
+                  size: { type: integer }
+                  url: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /uploads/{id}:
+    get:
+      tags: [Uploads]
+      summary: Download a file (authenticated)
+      description: Always served as an attachment with the stored MIME and `nosniff`.
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200": { description: File stream }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [Uploads]
+      summary: Delete a file (row + disk)
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "204": { description: Deleted }
+
+  /audit:
+    get:
+      tags: [Audit]
+      summary: List audit log entries (admin only)
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: Page of audit entries
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ListEnvelope" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /audit/export:
+    get:
+      tags: [Audit]
+      summary: Export audit log (stub)
+      responses:
+        "501": { description: Not implemented in this timebox }
+
+  /webhooks:
+    get:
+      tags: [Webhooks]
+      summary: List webhook endpoints (admin only)
+      description: The `secret` is never returned here — it is shown once at creation.
+      responses:
+        "200":
+          description: Page of endpoints
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ListEnvelope" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    ResourceId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+    PageSize:
+      name: pageSize
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 25 }
+    Sort:
+      name: sort
+      in: query
+      description: Allowlisted column. Unknown values fall back to `createdAt`.
+      schema: { type: string, example: createdAt }
+    Order:
+      name: order
+      in: query
+      schema: { type: string, enum: [asc, desc], default: desc }
+
+  responses:
+    BadRequest:
+      description: Validation failed or the request is not permitted in this state
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+          example:
+            error:
+              code: BAD_REQUEST
+              message: Validation failed
+              details:
+                fieldErrors:
+                  lines: ["Required"]
+    Unauthorized:
+      description: Missing, expired, revoked or inactive credentials
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    Forbidden:
+      description: Authenticated, but the role may not perform this action
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+          example:
+            error:
+              code: FORBIDDEN
+              message: "Role 'warehouse' may not perform this action"
+    NotFound:
+      description: Resource does not exist
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    Conflict:
+      description: State or version conflict
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    RateLimited:
+      description: Too many requests
+      headers:
+        Retry-After:
+          schema: { type: integer }
+          description: Seconds until the window resets
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+
+  schemas:
+    ListEnvelope:
+      type: object
+      description: The only list shape the API returns.
+      required: [data, page, pageSize, total, sort, order]
+      properties:
+        data:
+          type: array
+          items: {}
+        page: { type: integer, example: 1 }
+        pageSize: { type: integer, example: 25 }
+        total: { type: integer, example: 10000 }
+        sort: { type: string, example: createdAt }
+        order: { type: string, enum: [asc, desc], example: desc }
+
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              example: BAD_REQUEST
+            message: { type: string }
+            details: {}
+
+    Role:
+      type: string
+      enum: [admin, dispatcher, warehouse, driver, viewer]
+
+    OrderStatus:
+      type: string
+      enum: [pending, picking, packed, shipped, delivered, cancelled]
+
+    OrderPriority:
+      type: string
+      enum: [low, normal, high, urgent]
+
+    PublicUser:
+      type: object
+      required: [id, email, name, role]
+      properties:
+        id: { type: string }
+        email: { type: string, format: email }
+        name: { type: string }
+        role: { $ref: "#/components/schemas/Role" }
+        warehouseId: { type: string, nullable: true }
+
+    AuthTokens:
+      type: object
+      required: [accessToken, refreshToken, expiresIn]
+      properties:
+        accessToken: { type: string }
+        refreshToken: { type: string }
+        expiresIn: { type: string, example: 15m }
+
+    OrderLine:
+      type: object
+      required: [id, orderId, productId, qty, qtyPicked, unitPrice]
+      properties:
+        id: { type: string }
+        orderId: { type: string }
+        productId: { type: string }
+        qty: { type: integer, minimum: 1 }
+        qtyPicked: { type: integer, minimum: 0 }
+        unitPrice: { type: integer, description: Minor units }
+
+    Order:
+      type: object
+      required:
+        [id, reference, customerId, warehouseId, status, priority, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        reference:
+          type: string
+          description: Monotonic, unique, e.g. `ORD-20042`
+          example: ORD-20042
+        customerId: { type: string }
+        warehouseId: { type: string }
+        status: { $ref: "#/components/schemas/OrderStatus" }
+        priority: { $ref: "#/components/schemas/OrderPriority" }
+        promisedAt: { type: string, format: date-time, nullable: true }
+        notes: { type: string, nullable: true }
+        createdBy: { type: string, nullable: true }
+        allocatedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Set by `/orders/{id}/allocate`; required before the order can be picked.
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        lines:
+          type: array
+          items: { $ref: "#/components/schemas/OrderLine" }
+
+    CreateOrderRequest:
+      type: object
+      required: [customerId, warehouseId, lines]
+      properties:
+        customerId: { type: string }
+        warehouseId: { type: string }
+        priority: { $ref: "#/components/schemas/OrderPriority" }
+        promisedAt: { type: string, format: date-time }
+        notes: { type: string }
+        lines:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [productId, qty]
+            properties:
+              productId: { type: string }
+              qty: { type: integer, minimum: 1 }
+              unitPrice: { type: integer, minimum: 0, description: Minor units }

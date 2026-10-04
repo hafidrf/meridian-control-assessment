@@ -4,6 +4,8 @@ import { db } from "../../db/client.js";
 import { requireAuth, requireRoles } from "../../middleware/auth.js";
 import { validate } from "../../middleware/validate.js";
 import { notImplemented, notFound } from "../../utils/errors.js";
+import { listResponse } from "../../utils/respond.js";
+import type { PaginationQuery } from "../../types/index.js";
 import type { Request, Response } from "express";
 
 const createUserSchema = z.object({
@@ -17,9 +19,9 @@ const createUserSchema = z.object({
 export const usersRouter = Router();
 usersRouter.use(requireAuth);
 
-usersRouter.get("/", async (_req: Request, res: Response) => {
+usersRouter.get("/", async (req: Request, res: Response) => {
   const rows = db.prepare("SELECT id, email, name, role, warehouse_id as warehouseId, is_active as isActive, created_at as createdAt FROM users").all();
-  res.json({ data: rows });
+  listResponse(res, rows as object[], req.query as PaginationQuery);
 });
 
 usersRouter.get("/:id", async (req: Request, res: Response) => {

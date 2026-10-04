@@ -7,7 +7,9 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
-    "db:reset": "tsx src/db/reset.ts"
+    "db:reset": "tsx src/db/reset.ts",
+    "seed:orders": "tsx src/db/seed-orders.ts",
+    "smoke": "node ../scripts/smoke.mjs"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

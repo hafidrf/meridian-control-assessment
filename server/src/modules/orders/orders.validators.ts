@@ -25,6 +25,6 @@ export const transitionSchema = z.object({
 });
 
 export const bulkStatusSchema = z.object({
-  ids: z.array(z.string()).min(1),
-  status: z.string(),
+  ids: z.array(z.string()).min(1).max(500),
+  status: z.enum(["pending", "picking", "packed", "shipped", "delivered", "cancelled"]),
 });
