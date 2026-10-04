@@ -166,6 +166,11 @@ The floor is HTTP + JSON overhead on localhost, not the database; every query us
 an index, counts are a single `COUNT(*)` over the same `WHERE`, and no list endpoint
 returns unbounded rows.
 
+Run-to-run variance is real on a shared Windows machine: a repeat with 40 iterations
+gave p50 15.4–16.1 ms and p95 15.7–23.8 ms for the same endpoints. The table above is
+the 60-iteration run and is the one to quote; re-running the command will land in the
+same band, not necessarily on the same digits.
+
 Known bottleneck: `q=` uses `LIKE '%…%'`, which cannot use an index, so it scans.
 At 10k rows it is still ~16 ms; at millions I would move to FTS5 and keep the same
 endpoint contract.
