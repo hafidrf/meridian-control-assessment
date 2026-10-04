@@ -6,6 +6,7 @@ const PASSWORD = {
   admin: "Admin123!",
   dispatcher: "Dispatch123!",
   warehouse: "Warehouse123!",
+  viewer: "Viewer123!",
 };
 
 export function seed() {
@@ -25,6 +26,7 @@ export function seed() {
   const adminId = uuid();
   const dispId = uuid();
   const whUserId = uuid();
+  const viewerId = uuid();
   const vehicleId = uuid();
   const driverId = uuid();
   const orderId = uuid();
@@ -44,6 +46,10 @@ export function seed() {
   insertUser.run(adminId, "admin@meridian.test", bcrypt.hashSync(PASSWORD.admin, 10), "Amina Okonkwo", "admin", null, ts, ts);
   insertUser.run(dispId, "dispatcher@meridian.test", bcrypt.hashSync(PASSWORD.dispatcher, 10), "Leo Marsh", "dispatcher", wh1, ts, ts);
   insertUser.run(whUserId, "warehouse@meridian.test", bcrypt.hashSync(PASSWORD.warehouse, 10), "Priya Shah", "warehouse", wh1, ts, ts);
+  // Read-only account: exists so the "viewers are read-only" rule is demonstrable
+  // rather than asserted. Added by the candidate; the three starter accounts above
+  // are unchanged.
+  insertUser.run(viewerId, "viewer@meridian.test", bcrypt.hashSync(PASSWORD.viewer, 10), "Sam Ito", "viewer", null, ts, ts);
 
   const insertCust = db.prepare(
     `INSERT INTO customers (id, code, name, email, phone, billing_city, credit_limit, created_at)

@@ -74,7 +74,12 @@ integer minor units; booleans are booleans.
   (documented decision: no public self-signup surface).
 - **RBAC (B2)** — `requireRoles` actually checks. Resource-level rule: a `warehouse`
   user only sees rows for their own warehouse (enforced in SQL, not filtered in JS).
-  Forbidden-but-existing returns **403**, not 404.
+  Forbidden-but-existing returns **403**, not 404. Every mutating route is
+  role-guarded — see the viewer finding below.
+- **Viewer is genuinely read-only** — added `viewer@meridian.test` to the seed so
+  this is *demonstrable* rather than asserted, and added 9 assertions covering
+  transition, duplicate, allocate, update, delete, create, bulk-status and uploads.
+  All return 403.
 - **Inactive users** — `requireAuth` now re-reads the user and rejects a deactivated
   account even if its JWT is still valid.
 - **Orders (B3)** — `create` (monotonic reference, lines persisted, defaults to
@@ -132,9 +137,13 @@ integer minor units; booleans are booleans.
 
 ### Test / verification deliverables
 
-- `scripts/smoke.mjs` — **41 assertions, all passing**.
+- `scripts/smoke.mjs` — **51 assertions, all passing**.
 - `scripts/perf.mjs` — latency harness for the hot list endpoints.
 - `npm run smoke -w server` runs the suite against a running API.
+
+> Note on scope: the reviewer brief says the backlog is intentionally impossible
+> to finish, so effort went into contract coherence, the auth/RBAC path, and one
+> complete vertical slice rather than breadth across screens.
 
 ---
 
@@ -221,11 +230,15 @@ Seed accounts (unchanged, per the brief):
 | `admin@meridian.test`       | `Admin123!`      | admin       |
 | `dispatcher@meridian.test`  | `Dispatch123!`   | dispatcher  |
 | `warehouse@meridian.test`   | `Warehouse123!`  | warehouse   |
+| `viewer@meridian.test`      | `Viewer123!`     | viewer      |
+
+The first three are the starter accounts and are unchanged. The `viewer` account
+was **added** by me so the read-only rule can be exercised by the smoke suite.
 
 **Extra tests**
 
 ```bash
-npm run smoke -w server          # 41 contract / RBAC / auth assertions
+npm run smoke -w server          # 51 contract / RBAC / auth assertions
 node scripts/perf.mjs 60         # p50/p95/p99 on 10k orders
 ```
 
@@ -256,8 +269,13 @@ for reasoning about the contract.
   3. `orders.create` had no `lines` handling until the validator rejected it, and
      an earlier `random()` reference generator could collide on the `UNIQUE`
      constraint — now monotonic.
+  4. **`viewer` could mutate.** `POST /orders/:id/transition` and
+     `POST /orders/:id/duplicate` had no role guard at all, so a read-only account
+     could advance or clone an order. Found by auditing every mutating route for a
+     `requireRoles` call rather than trusting the earlier pass. Fixed, and now
+     covered by 9 assertions.
 - I re-ran typecheck (`tsc --noEmit`) on both workspaces and the full smoke suite
-  after every change; the final state is 0 TypeScript errors and 41/41 passing.
+  after every change; the final state is 0 TypeScript errors and 51/51 passing.
 - I did **not** blindly accept the starter's own docstrings — several were wrong
   about what the code actually did (e.g. `parsePagination` claimed to parse
   pagination while nothing applied it to SQL).

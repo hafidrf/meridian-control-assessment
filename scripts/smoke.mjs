@@ -54,9 +54,11 @@ const run = async () => {
   const admin = await login("admin@meridian.test", "Admin123!");
   const dispatcher = await login("dispatcher@meridian.test", "Dispatch123!");
   const warehouse = await login("warehouse@meridian.test", "Warehouse123!");
+  const viewer = await login("viewer@meridian.test", "Viewer123!");
   check("login admin returns access token", !!admin);
   check("login dispatcher returns access token", !!dispatcher);
   check("login warehouse returns access token", !!warehouse);
+  check("login viewer returns access token", !!viewer);
 
   const badLogin = await call("/auth/login", {
     method: "POST",
@@ -211,6 +213,34 @@ const run = async () => {
 
   const noAuth = await call("/orders");
   check("unauthenticated request returns 401", noAuth.status === 401, `status=${noAuth.status}`);
+
+  // A viewer is read-only: every mutating route on orders must refuse it.
+  const viewerRead = await call("/orders?page=1&pageSize=5", { token: viewer });
+  check(
+    "viewer can still read orders",
+    viewerRead.status === 200 && Array.isArray(viewerRead.json?.data),
+    `status=${viewerRead.status}`,
+  );
+  for (const [label, promise] of [
+    ["transition", call(`/orders/${orderId}/transition`, { method: "POST", token: viewer, body: { status: "cancelled" } })],
+    ["duplicate", call(`/orders/${orderId}/duplicate`, { method: "POST", token: viewer })],
+    ["allocate", call(`/orders/${orderId}/allocate`, { method: "POST", token: viewer })],
+    ["update", call(`/orders/${orderId}`, { method: "PATCH", token: viewer, body: { notes: "nope" } })],
+    ["delete", call(`/orders/${orderId}`, { method: "DELETE", token: viewer })],
+    ["create", call("/orders", { method: "POST", token: viewer, body: { customerId: customer.id, warehouseId: wh.id, lines: [{ productId: product.id, qty: 1 }] } })],
+    ["bulk-status", call("/orders/bulk-status", { method: "POST", token: viewer, body: { ids: [orderId], status: "cancelled" } })],
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    const res = await promise;
+    check(
+      `viewer is denied mutating orders: ${label} (403)`,
+      res.status === 403,
+      `status=${res.status} body=${JSON.stringify(res.json).slice(0, 140)}`,
+    );
+  }
+
+  const viewerUpload = await call("/uploads", { method: "POST", token: viewer });
+  check("viewer is denied uploads (403)", viewerUpload.status === 403, `status=${viewerUpload.status}`);
 
   // ------------------------------------------------- warehouse scoping
   const whScoped = await call("/orders?page=1&pageSize=50", { token: warehouse });

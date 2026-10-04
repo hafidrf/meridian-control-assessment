@@ -22,6 +22,13 @@ ordersRouter.post(
 ordersRouter.post("/bulk-status", requireRoles("admin", "dispatcher"), validate(bulkStatusSchema), ordersController.bulkStatus);
 ordersRouter.patch("/:id", requireRoles("admin", "dispatcher"), validate(updateOrderSchema), ordersController.update);
 ordersRouter.delete("/:id", requireRoles("admin"), ordersController.remove);
-ordersRouter.post("/:id/transition", validate(transitionSchema), ordersController.transition);
-ordersRouter.post("/:id/duplicate", ordersController.duplicate);
+// Mutating routes must all be role-guarded: `viewer` is read-only, so it must
+// not be able to advance or clone an order.
+ordersRouter.post(
+  "/:id/transition",
+  requireRoles("admin", "dispatcher", "warehouse"),
+  validate(transitionSchema),
+  ordersController.transition,
+);
+ordersRouter.post("/:id/duplicate", requireRoles("admin", "dispatcher"), ordersController.duplicate);
 ordersRouter.post("/:id/allocate", requireRoles("warehouse", "admin"), ordersController.allocate);

@@ -73,7 +73,7 @@ shipmentsRouter.post("/:id/assign", requireRoles("dispatcher", "admin"), (_req, 
   res.status(501).end();
 });
 
-shipmentsRouter.post("/:id/events", validate(eventSchema), (_req, res) => {
+shipmentsRouter.post("/:id/events", requireRoles("dispatcher", "admin", "warehouse"), validate(eventSchema), (_req, res) => {
   notImplemented("shipments.addEvent");
   res.status(501).end();
 });
