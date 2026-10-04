@@ -2,20 +2,22 @@
   "name": "meridian-control",
   "private": true,
   "version": "0.1.0",
-  "description": "Meridian Control — candidate starter kit for a fullstack coding test",
+  "description": "Meridian Control \u2014 candidate starter kit for a fullstack coding test",
   "workspaces": [
     "server",
     "frontend"
   ],
   "scripts": {
-    "dev": "concurrently -n server,web -c blue,green \"npm run dev -w server\" \"npm run dev -w frontend\"",
-    "dev:server": "npm run dev -w server",
-    "dev:web": "npm run dev -w frontend",
-    "build": "npm run build -w server && npm run build -w frontend",
+    "dev": "node init && concurrently -n server,web -c blue,green \"npm run dev -w server\" \"npm run dev -w frontend\"",
+    "dev:server": "node init && npm run dev -w server",
+    "dev:web": "node init && npm run dev -w frontend",
+    "build": "node init && npm run build -w server && npm run build -w frontend",
     "db:reset": "npm run db:reset -w server"
   },
   "devDependencies": {
-    "concurrently": "^9.1.2"
+    "concurrently": "^9.1.2",
+    "dotenv": "^8.2.0",
+    "node-fetch": "^3.3.2"
   },
   "engines": {
     "node": ">=22"
